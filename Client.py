@@ -1,476 +1,206 @@
 import json  # For JSON serialization/deserialization
 import socket  # For network communication
 import time  # For retry delays
-from CalculatorModel import CalculatorModel
-from SolverModel import SolverModel
+import threading
+import logging  # For logging events and data
 
-class MathClient:
-    """A robust client for interacting with the mathematical processing server.
-    
-    This client provides a reliable interface to the mathematical server, handling
-    network communication, request formatting, and response processing. It includes
-    retry logic, timeout handling, and robust error management.
-    
-    Key Features:
-    - Automatic connection management
-    - Retry logic for failed connections
-    - Timeout handling for operations
-    - JSON-based communication
-    - Comprehensive error handling
-    - Local model integration for response processing
-    
-    Supported Operations:
-    - Mathematical calculations
-    - Equation solving
-    - Function plotting
-    - Matrix operations (addition, subtraction, multiplication)
-    
-    Communication Protocol:
-    - Message framing with 4-byte size prefix
-    - JSON-encoded payloads
-    - Request-response pattern
-    - Error reporting
-    
-    Integration:
-    - Uses CalculatorModel for calculation response processing
-    - Uses SolverModel for equation solving response processing
-    """
-    
-    def __init__(self, host='localhost', port=12345):
-        """Initialize the client with connection parameters and models.
-        
-        Configuration:
-        1. Network parameters (host, port)
-        2. Timeout settings
-        3. Retry configuration
-        4. Local models for response processing
-        
-        Args:
-            host: Server hostname or IP address
-            port: Server port number
-            
-        Attributes:
-            connection_timeout: Time limit for initial connection
-            response_timeout: Time limit for server responses
-            max_retries: Maximum connection attempts
-            retry_delay: Seconds between retry attempts
-        """
-        self.calc_model = CalculatorModel()
-        self.solver_model = SolverModel()
-        self.client_socket = None
+class MathClientController:
+    """Controller for the View. Handles all server communication and UI updates."""
+    def __init__(self, view, host='localhost', port=12345):
+        self.view = view
         self.host = host
         self.port = port
-        self.connection_timeout = 5  # Connection timeout in seconds
-        self.response_timeout = 10   # Response timeout in seconds
-        self.max_retries = 3        # Maximum number of connection retries
-        self.retry_delay = 2        # Delay between retries in seconds
+        self.connection_timeout = 5
+        self.response_timeout = 10
+        self.max_retries = 1  # Reduced for faster feedback
+        self.retry_delay = 0.1  # Reduced for faster feedback
+        self.logger = logging.getLogger('MathClient')
+        self.logger.setLevel(logging.INFO)  # Set logging level
+        handler = logging.FileHandler('logs/client.log')  # Changed to relative path
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        self.logger.addHandler(handler)
+        # Wire up UI events
+        if hasattr(view, 'calc_buttons'):
+            for key, btn in view.calc_buttons.items():
+                if key == '=':
+                    btn.configure(command=self.on_calculate)
+                elif key in ['CE']:
+                    btn.configure(command=self.on_calc_clear)
+                elif key in ['⌫']:
+                    btn.configure(command=self.on_calc_backspace)
+                elif key in ['BIN', 'OCT', 'DEC', 'HEX']:
+                    btn.configure(command=lambda b=key: self.on_base_change(b))
+                else:
+                    btn.configure(command=lambda k=key: self.on_calc_button_press(k))
+        if hasattr(view, 'solve_button'):
+            view.solve_button.configure(command=self.on_solve)
+        if hasattr(view, 'plot_button'):
+            view.plot_button.configure(command=self.on_plot)
+        if hasattr(view, 'add_matrices_btn'):
+            view.add_matrices_btn.configure(command=self.on_matrix_add)
+        if hasattr(view, 'subtract_matrices_btn'):
+            view.subtract_matrices_btn.configure(command=self.on_matrix_subtract)
+        if hasattr(view, 'multiply_matrices_btn'):
+            view.multiply_matrices_btn.configure(command=self.on_matrix_multiply)
+        # Navigation buttons to update UI
+        if hasattr(view, 'calc_nav_button'):
+            view.calc_nav_button.configure(command=view.show_calculator)
+        if hasattr(view, 'solver_nav_button'):
+            view.solver_nav_button.configure(command=view.show_solver)
+        if hasattr(view, 'matrix_nav_button'):
+            view.matrix_nav_button.configure(command=view.show_matrix)
 
-    def connect(self):
-        """Connect to the server with retry logic.
-        
-        Connection Process:
-        1. Create new socket
-        2. Set connection timeout
-        3. Attempt connection
-        4. Set response timeout
-        5. Retry on failure
-        
-        Retry Logic:
-        - Attempts up to max_retries times
-        - Waits retry_delay seconds between attempts
-        - Cleans up failed connections
-        
-        Raises:
-            ConnectionError: If all connection attempts fail
-        """
+    def is_server_running(self):
+        try:
+            with socket.create_connection((self.host, self.port), timeout=2):
+                return True
+        except Exception:
+            return False
+
+    def update_server_status(self):
+        if self.is_server_running():
+            self.view.set_server_status('Online', color='green')
+        else:
+            self.view.set_server_status('Offline', color='red')
+
+    def send_request(self, request_dict):
+        self.logger.info(f'Sending request: {request_dict}')  # Log the request
+        self.update_server_status()  # Update status before sending
         retries = 0
         last_exception = None
-        while retries < self.max_retries:  # Retry connection up to max_retries
+        start = time.time()
+        while retries < self.max_retries:
             try:
-                self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # Create TCP socket
-                self.client_socket.settimeout(self.connection_timeout)  # Set connection timeout
-                self.client_socket.connect((self.host, self.port))  # Connect to server
-                self.client_socket.settimeout(self.response_timeout)  # Set response timeout
-                print(f"Connected to server at {self.host}:{self.port}")
-                return
-            except socket.timeout:
-                last_exception = "Connection timed out"
-            except ConnectionRefusedError:
-                last_exception = "Server is not available"
+                with socket.create_connection((self.host, self.port), timeout=self.connection_timeout) as sock:
+                    sock.settimeout(self.response_timeout)
+                    request_data = json.dumps(request_dict).encode('utf-8')
+                    sock.sendall(request_data)
+                    sock.shutdown(socket.SHUT_WR)
+                    response = b""
+                    while True:
+                        chunk = sock.recv(4096)
+                        if not chunk:
+                            break
+                        response += chunk
+                    received_response = json.loads(response.decode('utf-8'))
+                    self.logger.info(f'Received response: {received_response}')  # Log the response
+                    self.update_server_status()  # Update status after successful response
+                    print(f"Request/response roundtrip: {time.time() - start:.3f} seconds")
+                    return received_response
             except Exception as e:
                 last_exception = str(e)
-            retries += 1
-            if retries < self.max_retries:  # If we have retries left
-                print(f"Connection attempt {retries} failed. Retrying in {self.retry_delay} seconds...")
-                time.sleep(self.retry_delay)  # Wait before retrying
-            self.close()
-        raise ConnectionError(f"Failed to connect after {self.max_retries} attempts. Last error: {last_exception}")
+                self.logger.error(f'Error in send_request: {e}')  # Log the error
+                retries += 1
+                time.sleep(self.retry_delay)
+        self.update_server_status()  # Update status after failure
+        print(f"Request failed after {time.time() - start:.3f} seconds")
+        error_response = {"error": f"Server is offline or unreachable. Failed to connect after {self.max_retries} attempts. Last error: {last_exception}"}
+        self.logger.error(f'Request failed: {error_response}')  # Log the failure
+        return error_response
 
-    def send_request(self, request):
-        """Send a request to the server and get the response with timeout handling.
-        
-        Communication Protocol:
-        1. Connect if not connected
-        2. Add message size prefix
-        3. Send request
-        4. Receive response size
-        5. Receive response data
-        
-        Error Handling:
-        - Connection failures
-        - Timeout conditions
-        - Invalid responses
-        - Server disconnections
-        
-        Args:
-            request: Dictionary containing the request data
-            
-        Returns:
-            Dictionary containing the server's response
-            
-        Raises:
-            ConnectionError: If connection fails
-            TimeoutError: If server response times out
-        """
-        if not self.client_socket:  # If not connected
-            self.connect()
-        try:
-            request_data = json.dumps(request).encode()  # Serialize request to JSON bytes
-            size_prefix = len(request_data).to_bytes(4, byteorder='big')  # 4-byte length prefix
-            print(f"Sending request: {json.dumps(request)}")
-            self.client_socket.sendall(size_prefix + request_data)  # Send size + data
-            size_data = self._recv_all(4)  # Receive 4-byte response size
-            if not size_data:  # If connection closed
-                raise ConnectionError("Connection closed by server")
-            response_size = int.from_bytes(size_data, byteorder='big')  # Convert bytes to int
-            response_data = self._recv_all(response_size)  # Receive response data
-            if not response_data:  # If connection closed
-                raise ConnectionError("Connection closed by server")
-            response = json.loads(response_data.decode())  # Deserialize JSON response
-            print(f"Received response: {json.dumps(response)}")
-            return response
-        except socket.timeout:
-            print("Request timed out")
-            self.close()
-            raise TimeoutError("Server response timed out")
-        except Exception as e:
-            print(f"Communication error: {str(e)}")
-            self.close()
-            raise
-
-    def _recv_all(self, n):
-        """Helper method to receive exactly n bytes from the socket.
-        
-        Features:
-        - Handles partial receives
-        - Detects connection closure
-        - Respects timeout settings
-        
-        Args:
-            n: Number of bytes to receive
-            
-        Returns:
-            bytearray containing exactly n bytes, or None if connection closed
-            
-        Raises:
-            socket.timeout: If receive operation times out
-        """
-        data = bytearray()
-        while len(data) < n:  # Loop until all n bytes are received
-            try:
-                packet = self.client_socket.recv(n - len(data))  # Receive up to n bytes
-                if not packet:  # If connection closed
-                    return None
-                data.extend(packet)
-            except socket.timeout:
-                raise
-        return data
-
-    def send_calculation(self, expr, base):
-        """Send a calculation request to the server.
-        
-        Process:
-        1. Format calculation request
-        2. Send to server
-        3. Process response
-        4. Handle errors
-        
-        Args:
-            expr: Mathematical expression to evaluate
-            base: Number base for calculation (BIN, OCT, DEC, HEX)
-            
-        Returns:
-            String containing result or error message
-            
-        Error Handling:
-        - Server errors
-        - Connection issues
-        - Timeout conditions
-        - Invalid responses
-        """
-        try:
-            request = {"type": "calculate", "expr": expr, "base": base}
+    def on_calculate(self):
+        expr = self.view.get_calc_entry()
+        base = getattr(self.view, 'current_base', 'DEC')
+        self.logger.info(f'Calculating expression: {expr} in base {base}')  # Log calculate event
+        def worker():
+            request = {"model": "calculator", "instructions": {"expr": expr, "base": base}}
             response = self.send_request(request)
-            if "error" in response:  # If server returned error
-                return f"Error: {response['error']}"
-            expr, base, result = self.calc_model.deserialize_calculation(response)
-            return f"{base}: {result}"
-        except TimeoutError:
-            return "Error: Server response timed out"
-        except ConnectionError as e:
-            return f"Error: Connection failed - {str(e)}"
-        except Exception as e:
-            return f"Error: {str(e)}"
+            def update_ui():
+                if "result" in response:
+                    self.logger.info(f'Calculation result: {response["result"]}')  # Log result
+                    result = response["result"]
+                    try:
+                        if base == 'DEC':
+                            dec_value = int(float(result))
+                        else:
+                            dec_value = int(result, {'BIN': 2, 'OCT': 8, 'HEX': 16}[base])
+                        base_values = {
+                            'BIN': bin(dec_value)[2:] if dec_value >= 0 else '-' + bin(-dec_value)[2:],
+                            'OCT': oct(dec_value)[2:] if dec_value >= 0 else '-' + oct(-dec_value)[2:],
+                            'DEC': str(dec_value),
+                            'HEX': hex(dec_value)[2:].upper() if dec_value >= 0 else '-' + hex(-dec_value)[2:].upper()
+                        }
+                    except Exception:
+                        base_values = {'BIN': 'Err', 'OCT': 'Err', 'DEC': str(result), 'HEX': 'Err'}
+                    self.view.set_base_displays(base_values)
+                    self.view.set_calc_display(str(result))
+                else:
+                    self.logger.error(f'Calculation error: {response.get("error", "Unknown error")}')  # Log error
+                    self.view.set_calc_display(f"Error: {response.get('error', 'Unknown error')}")
+                    self.view.set_base_displays({'BIN': '', 'OCT': '', 'DEC': '', 'HEX': ''})
+            self.view.root.after(0, update_ui)
+        threading.Thread(target=worker, daemon=True).start()
 
-    def send_solve(self, equation):
-        """Send an equation solving request to the server.
-        
-        Process:
-        1. Format solve request
-        2. Send to server
-        3. Process solution steps
-        4. Handle errors
-        
-        Args:
-            equation: Equation to solve
-            
-        Returns:
-            List of solution steps or error message
-            
-        Error Handling:
-        - Server errors
-        - Connection issues
-        - Timeout conditions
-        - Invalid responses
-        """
-        try:
-            request = {"type": "solve", "equation": equation}
-            response = self.send_request(request)
-            if "error" in response:  # If server returned error
-                return f"Error: {response['error']}"
-            print(f"Debug - Response type: {type(response)}")
-            print(f"Debug - Response content: {json.dumps(response, indent=2)}")
-            print(f"Debug - Steps type: {type(response.get('steps'))}")
-            equation, steps = self.solver_model.deserialize_solution(response)
-            return steps
-        except TimeoutError:
-            return "Error: Server response timed out"
-        except ConnectionError as e:
-            return f"Error: Connection failed - {str(e)}"
-        except Exception as e:
-            return f"Error: {str(e)}"
+    def on_solve(self):
+        equation = self.view.get_solver_entry()
+        self.logger.info(f'Solving equation: {equation}')  # Log solve event
+        request = {"model": "solver", "instructions": {"equation": equation}}
+        response = self.send_request(request)
+        if "result" in response:
+            self.logger.info(f'Solve result: {response["result"]}')  # Log result
+            self.view.set_solver_output(response["result"])
+        else:
+            self.logger.error(f'Solve error: {response.get("error", "Unknown error")}')  # Log error
+            self.view.set_solver_output(f"Error: {response.get('error', 'Unknown error')}")
 
-    def send_plot(self, equation):
-        """Send a plotting request to the server.
-        
-        Process:
-        1. Format plot request
-        2. Send to server
-        3. Process plot result
-        4. Handle errors
-        
-        Args:
-            equation: Equation or function to plot
-            
-        Returns:
-            Status message or error message
-            
-        Error Handling:
-        - Server errors
-        - Connection issues
-        - Timeout conditions
-        - Invalid responses
-        """
-        try:
-            request = {"type": "plot", "equation": equation}
-            response = self.send_request(request)
-            if "error" in response:  # If server returned error
-                return f"Error: {response['error']}"
-            equation, message = self.solver_model.deserialize_plot(response)
-            return message
-        except TimeoutError:
-            return "Error: Server response timed out"
-        except ConnectionError as e:
-            return f"Error: Connection failed - {str(e)}"
-        except Exception as e:
-            return f"Error: {str(e)}"
+    def on_matrix_add(self):
+        m1, m2 = self.view.get_matrix_values()
+        request = {"model": "matrix", "instructions": {"operation": "add", "matrix1": m1, "matrix2": m2}}
+        response = self.send_request(request)
+        if "result" in response:
+            self.view.display_matrix_result(response["result"])
+        else:
+            self.view.show_matrix_error(response.get('error', 'Unknown error'))
+    def on_matrix_subtract(self):
+        m1, m2 = self.view.get_matrix_values()
+        request = {"model": "matrix", "instructions": {"operation": "subtract", "matrix1": m1, "matrix2": m2}}
+        response = self.send_request(request)
+        if "result" in response:
+            self.view.display_matrix_result(response["result"])
+        else:
+            self.view.show_matrix_error(response.get('error', 'Unknown error'))
 
-    def _prepare_matrix_for_json(self, matrix):
-        """Convert matrix elements to JSON-serializable types.
-        
-        Conversion Rules:
-        - Numbers → float
-        - NumPy types → float
-        - Other types → string representation
-        - Preserves matrix structure
-        
-        Args:
-            matrix: Input matrix (list of lists or string)
-            
-        Returns:
-            Matrix with JSON-serializable elements
-            
-        Note:
-            Handles both string format and list format matrices
-        """
-        if isinstance(matrix, str):  # If already a string
-            return matrix
-        if not matrix:  # If matrix is empty
-            return matrix
-        result = []
-        for row in matrix:  # Loop over matrix rows
-            new_row = []
-            for element in row:  # Loop over elements in row
-                try:
-                    if hasattr(element, 'item'):  # numpy type
-                        new_row.append(float(element.item()))
-                    else:
-                        new_row.append(float(element))
-                except (TypeError, ValueError):
-                    new_row.append(str(element))
-            result.append(new_row)
-        return result
+    def on_matrix_multiply(self):
+        m1, m2 = self.view.get_matrix_values()
+        request = {"model": "matrix", "instructions": {"operation": "multiply", "matrix1": m1, "matrix2": m2}}
+        response = self.send_request(request)
+        if "result" in response:
+            self.view.display_matrix_result(response["result"])
+        else:
+            self.view.show_matrix_error(response.get('error', 'Unknown error'))
 
-    def send_matrix_add(self, matrix1, matrix2):
-        """Send a matrix addition request to the server.
-        
-        Process:
-        1. Convert matrices to JSON format
-        2. Send request to server
-        3. Process response
-        4. Handle errors
-        
-        Args:
-            matrix1: First matrix operand
-            matrix2: Second matrix operand
-            
-        Returns:
-            Dictionary containing result matrix and metadata, or None on error
-            
-        Error Handling:
-        - Matrix format errors
-        - Server errors
-        - Connection issues
-        """
-        try:
-            json_matrix1 = self._prepare_matrix_for_json(matrix1)
-            json_matrix2 = self._prepare_matrix_for_json(matrix2)
-            request = {
-                "type": "matrix_add",
-                "matrix1": json_matrix1,
-                "matrix2": json_matrix2
-            }
-            print(f"Debug - Sending matrices: {json.dumps(request)}")  # Debug print
-            response = self.send_request(request)
-            if "error" in response:  # If server returned error
-                return None
-            return response["result"]
-        except Exception as e:
-            print(f"Error in matrix addition: {str(e)}")
-            return None
+    def on_plot(self):
+        equation = self.view.get_solver_entry()
+        request = {"model": "plotter", "instructions": {"equation": equation}}
+        response = self.send_request(request)
+        if "result" in response:
+            self.view.set_solver_output(response["result"])
+        else:
+            self.view.set_solver_output(f"Error: {response.get('error', 'Unknown error')}")
 
-    def send_matrix_subtract(self, matrix1, matrix2):
-        """Send a matrix subtraction request to the server.
-        
-        Process:
-        1. Convert matrices to JSON format
-        2. Send request to server
-        3. Process response
-        4. Handle errors
-        
-        Args:
-            matrix1: Matrix to subtract from
-            matrix2: Matrix to subtract
-            
-        Returns:
-            Dictionary containing result matrix and metadata, or None on error
-            
-        Error Handling:
-        - Matrix format errors
-        - Server errors
-        - Connection issues
-        """
-        try:
-            json_matrix1 = self._prepare_matrix_for_json(matrix1)
-            json_matrix2 = self._prepare_matrix_for_json(matrix2)
-            request = {
-                "type": "matrix_subtract",
-                "matrix1": json_matrix1,
-                "matrix2": json_matrix2
-            }
-            print(f"Debug - Sending matrices: {json.dumps(request)}")  # Debug print
-            response = self.send_request(request)
-            if "error" in response:  # If server returned error
-                return None
-            return response["result"]
-        except Exception as e:
-            print(f"Error in matrix subtraction: {str(e)}")
-            return None
+    def on_calc_button_press(self, key):
+        if key == '√':
+            entry = self.view.get_calc_entry() + '√'  
+            self.view.set_calc_display(entry)
+        elif key == '^':
+            entry = self.view.get_calc_entry() + '^'  
+            self.view.set_calc_display(entry)
+        elif key == '!':
+            entry = self.view.get_calc_entry() + '!'  
+            self.view.set_calc_display(entry)
+        else:
+            entry = self.view.get_calc_entry() + key  
+            self.view.set_calc_display(entry)
 
-    def send_matrix_multiply(self, matrix1, matrix2):
-        """Send a matrix multiplication request to the server.
-        
-        Process:
-        1. Convert matrices to JSON format
-        2. Send request to server
-        3. Process response
-        4. Handle errors
-        
-        Args:
-            matrix1: First matrix operand
-            matrix2: Second matrix operand
-            
-        Returns:
-            Dictionary containing result matrix and metadata, or None on error
-            
-        Error Handling:
-        - Matrix format errors
-        - Server errors
-        - Connection issues
-        """
-        try:
-            json_matrix1 = self._prepare_matrix_for_json(matrix1)
-            json_matrix2 = self._prepare_matrix_for_json(matrix2)
-            request = {
-                "type": "matrix_multiply",
-                "matrix1": json_matrix1,
-                "matrix2": json_matrix2
-            }
-            print(f"Debug - Sending matrices: {json.dumps(request)}")  # Debug print
-            response = self.send_request(request)
-            if "error" in response:  # If server returned error
-                return None
-            return response["result"]
-        except Exception as e:
-            print(f"Error in matrix multiplication: {str(e)}")
-            return None
+    def on_calc_clear(self):
+        self.view.set_calc_display("")
 
-    def close(self):
-        """Close the connection to the server.
-        
-        Process:
-        1. Shutdown socket gracefully
-        2. Close socket
-        3. Clear socket reference
-        4. Handle cleanup errors
-        
-        Error Handling:
-        - Socket errors
-        - Already closed connections
-        """
-        try:
-            if self.client_socket:  # If socket is open
-                self.client_socket.shutdown(socket.SHUT_RDWR)  # Shutdown socket
-                self.client_socket.close()  # Close socket
-                self.client_socket = None
-                print("Disconnected from server")
-        except Exception as e:
-            print(f"Error closing connection: {str(e)}")
+    def on_calc_backspace(self):
+        entry = self.view.get_calc_entry()
+        self.view.set_calc_display(entry[:-1])
 
-    def __del__(self):
-        """Destructor to ensure socket is closed.
-        
-        Ensures proper cleanup of network resources when the client
-        object is garbage collected.
-        """
-        self.close()  # Ensure socket is closed on deletion
+    def on_base_change(self, base):
+        self.view._update_button_states(base)
+        # Clear all fields when switching base
+        self.view.set_calc_display("")
+        self.view.set_base_displays({'BIN': '', 'OCT': '', 'DEC': '', 'HEX': ''})

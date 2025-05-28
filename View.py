@@ -1,37 +1,8 @@
 import tkinter as tk  # Tkinter for GUI
 from tkinter import ttk  # Themed Tkinter widgets
-from MatrixModel import MatrixModel
 
 class CalculatorView:
-    """A comprehensive graphical user interface for a mathematical application.
-    
-    This class implements a modern, multi-functional calculator interface with three main components:
-    1. Basic Calculator: Supports arithmetic operations in multiple number bases (BIN, OCT, DEC, HEX)
-    2. Equation Solver & Plotter: Handles equation solving and function visualization
-    3. Matrix Operations: Provides interface for matrix arithmetic and transformations
-    
-    Key Features:
-    - Dark theme with consistent styling across all components
-    - Responsive layout that adapts to window size
-    - Real-time base conversion display
-    - Interactive equation solving with step-by-step solutions
-    - Visual function plotting capabilities
-    - Matrix operations with flexible input formats
-    
-    Design Principles:
-    - Modular component organization
-    - Consistent styling and theming
-    - Clear visual hierarchy
-    - Intuitive user interaction
-    - Comprehensive error handling and feedback
-    
-    Integration Points:
-    - Uses MatrixModel for matrix input parsing and validation
-    - Interfaces with calculator model for arithmetic operations
-    - Connects with solver model for equation processing
-    - Communicates with plotting system for visualization
-    """
-    
+    """A pure UI model for the mathematical application. Handles only user input, output, and UI state."""
     def __init__(self, root):
         """Initialize the calculator view with all its components.
         
@@ -60,7 +31,6 @@ class CalculatorView:
         """
         self.root = root
         self.root.title("Your Math Tool")
-        self.matrix_model = MatrixModel()
         screen_width = root.winfo_screenwidth()  # Get screen width
         screen_height = root.winfo_screenheight()  # Get screen height
         window_width = int(screen_width * 0.6)  # 60% of screen width
@@ -128,6 +98,10 @@ class CalculatorView:
         self.nav_frame = ttk.Frame(self.main_container, style='TFrame')
         self.nav_frame.grid(row=0, column=0, pady=(0, 20))
         
+        # Server status label (added)
+        self.server_status_label = ttk.Label(self.nav_frame, text="Server: Unknown", style='TLabel', foreground='yellow')
+        self.server_status_label.grid(row=0, column=5, padx=(20, 0))
+        
         # Center the navigation buttons
         self.nav_frame.grid_columnconfigure(0, weight=1)  # Space before buttons
         self.nav_frame.grid_columnconfigure(4, weight=1)  # Space after buttons
@@ -168,6 +142,16 @@ class CalculatorView:
         
         # Set default base
         self.current_base = 'DEC'
+
+        # Show only calculator at startup
+        self.solver_frame.grid_remove()
+        self.matrix_frame.grid_remove()
+        self.calc_frame.grid()
+        
+        # Clear base displays on startup
+        self.set_base_displays({'BIN': '', 'OCT': '', 'DEC': '', 'HEX': ''})
+        
+        self.matrix_model = {}  # Initialize as an empty dictionary for matrix data
         
     def _init_calculator(self):
         """Initialize the basic calculator interface.
@@ -219,11 +203,11 @@ class CalculatorView:
             name_label = ttk.Label(self.base_display_frame, text=base_name, style='TLabel', width=12)
             name_label.grid(row=idx, column=0, sticky=tk.W, padx=(0, 10), pady=2)
             
-            # Base value label
-            value_label = ttk.Label(self.base_display_frame, text="0", style='TLabel')
-            value_label.grid(row=idx, column=1, sticky=tk.W, pady=2)
-            
-            self.base_displays[base_code] = value_label
+            # Base value label (read-only Entry for better visual distinction)
+            value_var = tk.StringVar(value="0")
+            value_entry = ttk.Entry(self.base_display_frame, textvariable=value_var, style='TEntry', state='readonly', width=24, justify='left')
+            value_entry.grid(row=idx, column=1, sticky=tk.W, pady=2)
+            self.base_displays[base_code] = value_var
         
         # Calculator buttons
         self.calc_buttons = {}
@@ -262,10 +246,10 @@ class CalculatorView:
         
         # Operators on the right (columns 3-5)
         operator_layout = [
-            ['/', '(', ')'],
-            ['*', '⌫', 'CE'],
-            ['-', ' ', ' '],
-            ['+', ' ', '=']
+            ['/', 'CE', '⌫'],
+            ['*', '(', ')'],
+            ['-', '^', '!'],
+            ['+', '√', '=']
         ]
         
         # Place numbers
@@ -277,7 +261,7 @@ class CalculatorView:
                     self.calc_buttons[text] = btn
         
         # Place operators
-        for row, operators in enumerate(operator_layout, 6):  # Loop over operator pad rows
+        for row, operators in enumerate(operator_layout, 6):  # Loop over operator pad rows, starting from row 6
             for col, text in enumerate(operators):  # Loop over operators in row
                 if text != ' ':  # If not a blank space
                     btn = ttk.Button(self.calc_frame, text=text, style='TButton')
@@ -493,134 +477,24 @@ class CalculatorView:
         
         # Update current base
         self.current_base = base
-        for base_code, value_label in self.base_displays.items():  # Loop over all base displays
-            value_label.config(text=f"{base_code}: 0")
+        for base_code, value_var in self.base_displays.items():  # Loop over all base displays
+            value_var.set(f"{base_code}: 0")
         
     def show_calculator(self):
-        """Show the calculator interface and hide other components.
-        
-        Process:
-        1. Hide solver and matrix interfaces
-        2. Clear all displays and inputs
-        3. Reset base conversion displays
-        4. Show calculator frame
-        
-        Cleanup Operations:
-        - Clear solver input/output
-        - Reset matrix inputs/results
-        - Clear calculator display
-        - Reset base displays to 0
-        """
-        # Clean up solver
         self.solver_frame.grid_remove()
-        self.solver_entry.delete(0, tk.END)
-        self.solver_output.delete(1.0, tk.END)
-        
-        # Clean up matrix
         self.matrix_frame.grid_remove()
-        self.matrix_result_display.delete(1.0, tk.END)
-        if hasattr(self, 'matrix_a_entries'):
-            for row in self.matrix_a_entries:
-                for entry in row:
-                    entry.delete(0, tk.END)
-        if hasattr(self, 'matrix_b_entries'):
-            for row in self.matrix_b_entries:
-                for entry in row:
-                    entry.delete(0, tk.END)
-        
-        # Clean up calculator
-        self.calc_entry.delete(0, tk.END)
-        self.set_base_displays({
-            'BIN': 'Binary: 0',
-            'OCT': 'Octal: 0',
-            'DEC': 'Decimal: 0',
-            'HEX': 'Hexadecimal: 0'
-        })
-        
-        # Show calculator frame
         self.calc_frame.grid()
-        
+
     def show_solver(self):
-        """Show the solver interface and hide other components.
-        
-        Process:
-        1. Hide calculator and matrix interfaces
-        2. Clear any existing content
-        3. Reset solver interface state
-        4. Show solver frame
-        
-        Cleanup Operations:
-        - Clear calculator display and memory
-        - Reset solver input field
-        - Clear solution output area
-        - Reset matrix interface if active
-        """
-        # Clean up calculator
         self.calc_frame.grid_remove()
-        self.calc_entry.delete(0, tk.END)
-        
-        # Clean up matrix
         self.matrix_frame.grid_remove()
-        self.matrix_result_display.delete(1.0, tk.END)
-        if hasattr(self, 'matrix_a_entries'):
-            for row in self.matrix_a_entries:
-                for entry in row:
-                    entry.delete(0, tk.END)
-        if hasattr(self, 'matrix_b_entries'):
-            for row in self.matrix_b_entries:
-                for entry in row:
-                    entry.delete(0, tk.END)
-        
-        # Clean up solver
-        self.solver_entry.delete(0, tk.END)
-        self.solver_output.delete(1.0, tk.END)
-        
-        # Show solver frame
         self.solver_frame.grid()
-        
+
     def show_matrix(self):
-        """Show the matrix interface and hide other components.
-        
-        Process:
-        1. Hide calculator and solver interfaces
-        2. Clear any existing matrix inputs
-        3. Reset result display
-        4. Clear error messages
-        5. Show matrix frame
-        
-        Cleanup Operations:
-        - Clear calculator display
-        - Reset solver fields
-        - Clear matrix inputs
-        - Reset error states
-        """
-        # Clean up calculator
         self.calc_frame.grid_remove()
-        self.calc_entry.delete(0, tk.END)
-        
-        # Clean up solver
         self.solver_frame.grid_remove()
-        self.solver_entry.delete(0, tk.END)
-        self.solver_output.delete(1.0, tk.END)
-        
-        # Clean up matrix
-        if hasattr(self, 'matrix_result_display'):
-            self.matrix_result_display.config(state='normal')
-            self.matrix_result_display.delete(1.0, tk.END)
-            self.matrix_result_display.config(state='disabled')
-            
-        if hasattr(self, 'matrix_a_input'):
-            self.matrix_a_input.delete(1.0, tk.END)
-            
-        if hasattr(self, 'matrix_b_input'):
-            self.matrix_b_input.delete(1.0, tk.END)
-            
-        if hasattr(self, 'matrix_error_label'):
-            self.matrix_error_label.config(text="")
-        
-        # Show matrix frame
         self.matrix_frame.grid()
-        
+
     def show_custom_matrix_input(self):
         """Show the custom matrix input interface."""
         self.custom_matrix_frame.grid()
@@ -669,7 +543,7 @@ class CalculatorView:
         """
         for base_code, value in values.items():
             if base_code in self.base_displays:
-                self.base_displays[base_code].config(text=value)
+                self.base_displays[base_code].set(value)
     
     def set_calc_display(self, text: str):
         """Set the calculator main display text.
@@ -713,167 +587,16 @@ class CalculatorView:
             if line.startswith('─' * 40) or line.strip() == '':
                 self.solver_output.insert(tk.END, '\n')
 
-    def get_matrix_dimensions(self) -> tuple:
-        """Get the dimensions for both matrices from the input fields.
-        
-        Returns:
-            tuple: ((rows_a, cols_a), (rows_b, cols_b)) containing dimensions for both matrices
-        """
-        try:
-            matrix_a_dims = (int(self.matrix_a_rows.get()), int(self.matrix_a_cols.get()))
-            matrix_b_dims = (int(self.matrix_b_rows.get()), int(self.matrix_b_cols.get()))
-            return matrix_a_dims, matrix_b_dims
-        except ValueError:
-            return None
-            
-    def create_matrix_entries(self, matrix_a_dims: tuple, matrix_b_dims: tuple):
-        """Create entry widgets for both matrices based on given dimensions."""
-        # Clear existing entries
-        for widget in self.matrix_a_frame.winfo_children():
-            widget.destroy()
-        for widget in self.matrix_b_frame.winfo_children():
-            widget.destroy()
-        
-        self.matrix_a_entries = []
-        self.matrix_b_entries = []
-        
-        # Create Matrix A entries
-        rows_a, cols_a = matrix_a_dims
-        for i in range(rows_a):
-            row_entries = []
-            for j in range(cols_a):
-                entry = ttk.Entry(self.matrix_a_frame, width=8)
-                entry.grid(row=i, column=j, padx=2, pady=2)
-                row_entries.append(entry)
-            self.matrix_a_entries.append(row_entries)
-        
-        # Create Matrix B entries
-        rows_b, cols_b = matrix_b_dims
-        for i in range(rows_b):
-            row_entries = []
-            for j in range(cols_b):
-                entry = ttk.Entry(self.matrix_b_frame, width=8)
-                entry.grid(row=i, column=j, padx=2, pady=2)
-                row_entries.append(entry)
-            self.matrix_b_entries.append(row_entries)
-                
     def get_matrix_values(self) -> tuple:
-        """Get and validate the values from both matrix inputs.
-        
-        Process:
-        1. Retrieve raw text from both matrix inputs
-        2. Validate input format
-        3. Parse matrix structure
-        4. Check matrix dimensions
-        
+        """Get the raw values from both matrix inputs as strings.
         Returns:
-            tuple: (matrix_a, matrix_b) where each matrix is a string in the format [a,b,c; d,e,f],
-                  or None if the input is invalid
-                  
-        Error Handling:
-        - Empty input validation
-        - Format validation
-        - Dimension checking
-        - Numeric content validation
+            tuple: (matrix_a_text, matrix_b_text) as raw strings
         """
-        try:
-            # Get raw text from both inputs
-            matrix_a_text = self.matrix_a_input.get("1.0", tk.END).strip()
-            matrix_b_text = self.matrix_b_input.get("1.0", tk.END).strip()
-            
-            # Check if inputs are empty
-            if not matrix_a_text or not matrix_b_text:
-                raise ValueError("Please enter both matrices")
-            
-            # Parse both matrices to ensure they're in the correct format
-            matrix_a = self.parse_matrix_input(matrix_a_text)
-            matrix_b = self.parse_matrix_input(matrix_b_text)
-            
-            return matrix_a, matrix_b
-            
-        except ValueError as e:
-            self.show_matrix_error(str(e))
-            return None
+        matrix_a_text = self.matrix_a_input.get("1.0", tk.END).strip()
+        matrix_b_text = self.matrix_b_input.get("1.0", tk.END).strip()
+        return matrix_a_text, matrix_b_text
 
-    def format_matrix_input(self, text: str) -> str:
-        """Format raw matrix input text into standardized format.
-        
-        Converts various input formats into the standard [a,b,c; d,e,f] format.
-        Handles multiple input styles:
-        - Space-separated values
-        - Comma-separated values
-        - Mixed format
-        - Multi-line input
-        
-        Args:
-            text: Raw matrix input text
-            
-        Returns:
-            str: Formatted matrix text in [a,b,c; d,e,f] format
-            
-        Raises:
-            ValueError: If input format is invalid or inconsistent
-        """
-        # Split into rows (assuming rows are separated by newlines)
-        rows = [row.strip() for row in text.split('\n') if row.strip()]
-        
-        if not rows:
-            raise ValueError("Matrix cannot be empty")
-        
-        # Process each row: split by whitespace or commas and join with commas
-        processed_rows = []
-        first_row_length = None
-        
-        for i, row in enumerate(rows):
-            # Split by both whitespace and commas
-            elements = [elem.strip() for elem in row.replace(',', ' ').split() if elem.strip()]
-            
-            # Validate row length
-            if first_row_length is None:
-                first_row_length = len(elements)
-            elif len(elements) != first_row_length:
-                raise ValueError(f"Row {i+1} has different number of elements than first row")
-                
-            if not elements:
-                raise ValueError(f"Row {i+1} is empty")
-                
-            processed_rows.append(','.join(elements))
-        
-        # Join rows with semicolons and wrap in brackets
-        return '[' + '; '.join(processed_rows) + ']'
-
-    def parse_matrix_input(self, matrix_text: str) -> str:
-        """Parse and validate a matrix from text input.
-        
-        Validates and standardizes matrix input format.
-        Supports:
-        - Numeric values
-        - Symbolic elements
-        - Mixed content
-        - Various delimiters
-        
-        Args:
-            matrix_text: String containing the matrix in specified format
-            
-        Returns:
-            str: The matrix text in correct format [a,b,c; d,e,f; g,h,i]
-            
-        Raises:
-            ValueError: If the input format is invalid
-        """
-        try:
-            # If the input is already in the correct format, return it
-            if matrix_text.startswith('[') and matrix_text.endswith(']'):
-                # Validate that it can be parsed
-                self.matrix_model.parse_matrix_input(matrix_text)
-                return matrix_text
-                
-            # Otherwise, format it
-            return self.format_matrix_input(matrix_text)
-        except ValueError as e:
-            raise ValueError(str(e))
-
-    def display_matrix_result(self, result: dict):
+    def display_matrix_result(self, result):
         """Display the matrix operation result.
         
         Handles various result formats and provides proper formatting
@@ -903,7 +626,7 @@ class CalculatorView:
                 formatted_output = result['formatted']
             # If result is a list (matrix), format it
             elif isinstance(result, list):
-                formatted_output = self.matrix_model.format_matrix(result)
+                formatted_output = self.format_matrix(result)
             else:
                 formatted_output = str(result)
             
@@ -938,3 +661,30 @@ class CalculatorView:
         
         # Also update the error label
         self.matrix_error_label.config(text=message)
+
+    def format_matrix(self, matrix):
+        if isinstance(matrix, list):
+            return '\n'.join([' '.join(map(str, row)) for row in matrix])
+        return str(matrix)
+
+    # --- UI state management ---
+    def clear_entry(self):
+        self.calc_entry.delete(0, "end")
+
+    def clear_solver(self):
+        self.solver_entry.delete(0, "end")
+        self.solver_output.delete(1.0, "end")
+
+    def clear_matrix(self):
+        self.matrix_a_input.delete(1.0, "end")
+        self.matrix_b_input.delete(1.0, "end")
+        self.matrix_result_display.config(state='normal')
+        self.matrix_result_display.delete(1.0, "end")
+        self.matrix_result_display.config(state='disabled')
+        self.matrix_error_label.config(text="")
+
+    def set_server_status(self, status, color=None):
+        """Set the server status label text and color."""
+        self.server_status_label.config(text=f"Server: {status}")
+        if color:
+            self.server_status_label.config(foreground=color)
