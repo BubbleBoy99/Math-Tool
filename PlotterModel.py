@@ -2,6 +2,7 @@ import sympy as sp  # Symbolic mathematics
 import numpy as np  # Numerical computations
 import matplotlib.pyplot as plt  # Plotting
 from typing import Dict, List, Tuple, Any, Optional
+from ModelUtils import add_multiplication, serialize_plot, deserialize_plot, FUNCTIONS
 
 class PlotterModel:
     """A model class for plotting mathematical functions and equations.
@@ -52,22 +53,7 @@ class PlotterModel:
            - Number of plot points for smooth curves
            - Value limits to handle infinities
         """
-        self.functions = {
-            'sin': sp.sin,  # SymPy sine
-            'cos': sp.cos,  # SymPy cosine
-            'tan': sp.tan,  # SymPy tangent
-            'cot': lambda x: 1/sp.tan(x),  # Cotangent as 1/tan
-            'sec': lambda x: 1/sp.cos(x),  # Secant as 1/cos
-            'csc': lambda x: 1/sp.sin(x),  # Cosecant as 1/sin
-            'log': sp.log,  # SymPy logarithm
-            'ln': sp.log,   # Natural logarithm (alias)
-            'exp': sp.exp,  # Exponential
-            'sqrt': sp.sqrt,  # Square root
-            'abs': abs,  # Absolute value
-            'asin': sp.asin,  # Inverse sine
-            'acos': sp.acos,  # Inverse cosine
-            'atan': sp.atan   # Inverse tangent
-        }
+        self.functions = FUNCTIONS
         self._plot_styles = {
             'default': {'color': 'blue', 'linewidth': 1.5},
             'solution': {'color': 'red', 'marker': 'o', 'markersize': 8},
@@ -78,191 +64,6 @@ class PlotterModel:
         self._plot_points = 1000
         self._value_limit = 1e6  # Limit for y values to avoid plotting huge numbers
 
-    def serialize_plot(self, equation: str, message: str) -> Dict[str, str]:
-        """Serialize plot information for storage or transmission.
-        
-        Used for:
-        - Saving plot configurations
-        - Transmitting plot data between components
-        - Logging plot history
-        
-        Args:
-            equation: The mathematical expression that was plotted
-            message: Status or description message about the plot
-            
-        Returns:
-            Dictionary containing:
-            - type: "plot"
-            - equation: Original expression
-            - message: Status message
-        """
-        return {
-            "type": "plot",
-            "equation": equation,
-            "message": message
-        }
-
-    def deserialize_plot(self, data: Dict[str, Any]) -> Tuple[str, str]:
-        """Deserialize plot information from storage or transmission.
-        
-        Used for:
-        - Loading saved plot configurations
-        - Reconstructing plot history
-        - Importing plot data
-        
-        Args:
-            data: Dictionary containing serialized plot data
-            
-        Returns:
-            Tuple containing:
-            - Original expression string
-            - Status message
-            
-        Raises:
-            ValueError: If data format is invalid or missing required fields
-        """
-        if not isinstance(data, dict):
-            raise ValueError("Invalid data format: expected dictionary")
-            
-        if data.get("type") != "plot":
-            raise ValueError("Invalid plot data: wrong type")
-            
-        required_fields = ["equation", "message"]
-        if not all(field in data for field in required_fields):
-            raise ValueError(f"Invalid plot data: missing fields {[f for f in required_fields if f not in data]}")
-            
-        return data["equation"], data["message"]
-
-    def add_multiplication(self, expr: str) -> str:
-        """Add implicit multiplication symbols to expression.
-        
-        This method handles cases where multiplication is implied but not explicitly written:
-        - Between numbers and variables (2x → 2*x)
-        - Between variables (xy → x*y)
-        - Before functions (2sin(x) → 2*sin(x))
-        - Before and after parentheses (2(x+1) → 2*(x+1))
-        
-        The method carefully preserves:
-        - Function calls and their arguments
-        - Operator precedence
-        - Negative numbers
-        - Decimal points
-        
-        Args:
-            expr: Mathematical expression with implicit multiplication
-            
-        Returns:
-            Expression with explicit multiplication symbols
-            
-        Raises:
-            ValueError: If the expression contains invalid characters or syntax
-        """
-        if not expr:
-            return expr
-            
-        result = []
-        tokens = []
-        i = 0
-        
-        # Loop to tokenize the input expression character by character
-        while i < len(expr):
-            # Skip whitespace
-            if expr[i].isspace():
-                i += 1
-                continue
-            # Check for functions
-            found_func = False
-            for func in sorted(self.functions.keys(), key=len, reverse=True):
-                # Loop through all supported function names, longest first, to match at current position
-                if expr[i:].startswith(func):
-                    # For functions, we need to capture the entire function call including its argument
-                    start_idx = i
-                    i += len(func)
-                    # Skip whitespace between function name and opening parenthesis
-                    while i < len(expr) and expr[i].isspace():
-                        i += 1
-                    if i < len(expr) and expr[i] == '(':  # Check for function call
-                        paren_count = 1
-                        i += 1
-                        while i < len(expr) and paren_count > 0:
-                            # Loop to find the matching closing parenthesis for the function argument
-                            if expr[i] == '(':  # Increase count for nested parenthesis
-                                paren_count += 1
-                            elif expr[i] == ')':  # Decrease count for closing parenthesis
-                                paren_count -= 1
-                            i += 1
-                        # Get the entire function call as one token
-                        func_call = expr[start_idx:i]
-                        tokens.append(('func_call', func_call))
-                        found_func = True
-                        break
-                    else:
-                        # If there's no opening parenthesis, just add the function name
-                        tokens.append(('func', func))
-                        found_func = True
-                        break
-            if found_func:
-                continue
-            # Check for numbers (including decimals and negative signs)
-            if expr[i].isdigit() or (expr[i] == '-' and i + 1 < len(expr) and expr[i + 1].isdigit()):
-                num = expr[i]
-                i += 1
-                while i < len(expr) and (expr[i].isdigit() or expr[i] == '.'):
-                    # Loop to collect all digits and decimal points for a number
-                    num += expr[i]
-                    i += 1
-                tokens.append(('number', num))
-                continue
-            # Check for variables
-            if expr[i].isalpha():
-                var = expr[i]
-                i += 1
-                while i < len(expr) and (expr[i].isalnum() or expr[i] == '_'):
-                    # Loop to collect all alphanumeric characters and underscores for a variable name
-                    var += expr[i]
-                    i += 1
-                if var not in self.functions:
-                    tokens.append(('var', var))
-                continue
-            # Operators and parentheses
-            if expr[i] in '+-*/()^=':
-                tokens.append(('op', expr[i]))
-                i += 1
-                continue
-            raise ValueError(f"Invalid character in expression: {expr[i]}")
-        
-        # Process tokens to add multiplication symbols
-        for i, token in enumerate(tokens):
-            # Loop through all tokens to reconstruct the expression and insert '*' where needed
-            curr_type, curr_val = token
-            # For function calls, we need to process the arguments
-            if curr_type == 'func_call':
-                # Extract the function name and arguments
-                func_name = curr_val[:curr_val.index('(')]
-                args = curr_val[curr_val.index('(') + 1:-1]
-                # Process the arguments recursively
-                processed_args = self.add_multiplication(args)
-                # Reconstruct the function call
-                result.append(f"{func_name}({processed_args})")
-            else:
-                result.append(curr_val)
-            # Add multiplication symbols where needed
-            if i < len(tokens) - 1:
-                next_type, next_val = tokens[i + 1]
-                needs_mult = False
-                # Check for cases where multiplication is implied between current and next token
-                if curr_type == 'number' and next_type in ('var', 'func', 'func_call') or (next_type == 'op' and next_val == '('):
-                    needs_mult = True
-                elif curr_type == 'op' and curr_val == ')' and next_type in ('number', 'var', 'func', 'func_call'):
-                    needs_mult = True
-                elif curr_type == 'var' and (next_type in ('number', 'func', 'func_call') or (next_type == 'op' and next_val == '(')):
-                    needs_mult = True
-                elif curr_type == 'var' and next_type == 'var':
-                    needs_mult = True
-                if needs_mult:
-                    result.append('*')
-        
-        return ''.join(result)
 
     def plot_equation(self, equation_str: str, x_range: Tuple[float, float] = (-10, 10),
                      y_range: Optional[Tuple[float, float]] = None,
@@ -313,8 +114,8 @@ class PlotterModel:
                 raise ValueError("Invalid equation: missing equals sign")
                 
             left, right = equation_str.split('=')
-            left = self.add_multiplication(left.strip())
-            right = self.add_multiplication(right.strip())
+            left = add_multiplication(left.strip())
+            right = add_multiplication(right.strip())
             
             # Create sympy expressions
             try:

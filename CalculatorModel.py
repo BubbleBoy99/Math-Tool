@@ -1,6 +1,8 @@
 import re  # Regular expressions for parsing
 from typing import Dict, Union, Tuple, List, Any
 from functools import lru_cache  # For caching function results
+from ModelUtils import validate_input
+import math
 
 class CalculatorModel:
     """A model class for handling mathematical calculations in different number bases.
@@ -62,6 +64,7 @@ class CalculatorModel:
             }
         }
         self.operators = ['+', '-', '*', '/', '(', ')']
+        self.functions = ['pow', 'sqrt', 'fact']
 
     def get_available_digits(self, base: str) -> List[str]:
         """Get the list of available digits for a given base.
@@ -119,153 +122,6 @@ class CalculatorModel:
         if base not in self.base_configs:
             raise ValueError(f"Invalid base: {base}. Must be one of {list(self.base_configs.keys())}")
         return self.base_configs[base]['max_display_digits']
-
-    def serialize_calculation(self, expr: str, base: str, result: str) -> Dict[str, str]:
-        """Serialize a calculation for storage or transmission.
-        
-        Used for:
-        - Saving calculation history
-        - Transmitting calculations between components
-        
-        Args:
-            expr: The mathematical expression
-            base: The number base used
-            result: The calculated result
-            
-        Returns:
-            Dictionary containing the calculation details
-        """
-        return {
-            "type": "calculation",
-            "expr": expr,
-            "base": base,
-            "result": result
-        }
-
-    def deserialize_calculation(self, data: Dict[str, Any]) -> Tuple[str, str, str]:
-        """Deserialize a calculation from storage or transmission.
-        
-        Used for:
-        - Loading saved calculations
-        - Reconstructing calculations from history
-        - Processing received calculation data
-        
-        Args:
-            data: Dictionary containing calculation data
-            
-        Returns:
-            Tuple of (expression, base, result)
-            
-        Raises:
-            ValueError: If the data format is invalid
-        """
-        if not isinstance(data, dict):
-            raise ValueError("Invalid data format: expected dictionary")
-            
-        if data.get("type") != "calculation":
-            raise ValueError("Invalid calculation data: wrong type")
-            
-        required_fields = ["expr", "base", "result"]
-        if not all(field in data for field in required_fields):
-            raise ValueError(f"Invalid calculation data: missing fields {[f for f in required_fields if f not in data]}")
-            
-        return data["expr"], data["base"], data["result"]
-
-    def validate_expression(self, expr: str, base: str) -> None:
-        """Validate that the expression is valid for the given base.
-        
-        Performs comprehensive validation including:
-        - Digit validity for the specified base
-        - Operator placement and combinations
-        - Parentheses matching and placement
-        - Expression structure and completeness
-        - Number length limits
-        
-        Args:
-            expr: The mathematical expression to validate
-            base: The number base to validate against
-            
-        Raises:
-            ValueError: With detailed error message if validation fails
-        """
-        if not isinstance(expr, str):
-            raise ValueError("Expression must be a string")
-            
-        if not expr or expr.isspace():
-            raise ValueError("Expression cannot be empty")
-        
-        if base not in self.base_configs:
-            raise ValueError(f"Invalid base: {base}. Must be one of {list(self.base_configs.keys())}")
-        
-        valid_digits = self.base_configs[base]['valid_digits']
-        
-        # Split expression into tokens using regex
-        tokens = re.findall(r'([0-9A-Fa-f]+|[\+\-\*\/\(\)]|\s+)', expr)  # re.findall for tokenizing
-        tokens = [t for t in tokens if not t.isspace()]
-        
-        if not tokens:
-            raise ValueError("Expression contains no valid tokens")
-        
-        # Validate each token and check for invalid combinations
-        prev_token_type = None  # Can be 'number', 'operator', 'open_paren', 'close_paren'
-        paren_count = 0
-        operator_count = 0
-        number_count = 0
-        
-        for token in tokens:
-            # Loop through each token in the expression to validate its type and placement
-            if token in '+-*/':
-                operator_count += 1
-                if prev_token_type in [None, 'operator', 'open_paren']:
-                    # Check for invalid operator placement (e.g., two operators in a row)
-                    if token not in '+-' or prev_token_type == 'operator':  # Allow unary + and -
-                        raise ValueError(f"Invalid operator placement: '{token}' after {prev_token_type}")
-                prev_token_type = 'operator'
-            elif token == '(':  # Parenthesis
-                if prev_token_type == 'number':
-                    # Check for missing operator before parenthesis
-                    raise ValueError("Missing operator before parenthesis")
-                paren_count += 1
-                prev_token_type = 'open_paren'
-            elif token == ')':
-                if prev_token_type in [None, 'operator', 'open_paren']:
-                    # Check for invalid closing parenthesis placement
-                    raise ValueError("Invalid closing parenthesis placement - no expression inside parentheses")
-                paren_count -= 1
-                if paren_count < 0:
-                    # Check for unmatched closing parenthesis
-                    raise ValueError("Unmatched closing parenthesis")
-                prev_token_type = 'close_paren'
-            else:
-                # Validate number for the current base
-                if not all(d in valid_digits for d in token.upper()):
-                    # Check for invalid digits in the number
-                    invalid_digits = [d for d in token.upper() if d not in valid_digits]
-                    raise ValueError(f"Invalid digit(s) {invalid_digits} for {base} number: {token}")
-                # Check number length
-                if len(token) > self.get_max_digits(base):
-                    raise ValueError(f"Number {token} exceeds maximum length of {self.get_max_digits(base)} digits for {base}")
-                if prev_token_type == 'close_paren':
-                    # Check for missing operator after parenthesis
-                    raise ValueError("Missing operator after parenthesis")
-                prev_token_type = 'number'
-                number_count += 1
-        
-        if paren_count > 0:
-            # Check for unclosed parenthesis
-            raise ValueError(f"Unclosed parenthesis: missing {paren_count} closing parenthesis")
-        
-        if prev_token_type == 'operator':
-            # Check if expression ends with an operator
-            raise ValueError("Expression cannot end with an operator")
-            
-        if number_count == 0:
-            # Check if there is at least one number in the expression
-            raise ValueError("Expression must contain at least one number")
-            
-        if operator_count >= number_count:
-            # Check for too many operators compared to operands
-            raise ValueError("Too many operators for the number of operands")
 
     @lru_cache(maxsize=128)  # Cache results for performance
     def to_decimal(self, number_str: str, base: str) -> int:
@@ -396,9 +252,6 @@ class CalculatorModel:
         if base == 'DEC':
             return expr
             
-        # First, validate the expression
-        self.validate_expression(expr, base)
-        
         # Handle unary operators and tokenize the expression
         expr = re.sub(r'^\s*-\s*', '-', expr)  # Handle unary minus at start
         expr = re.sub(r'^\s*\+\s*', '', expr)  # Remove unary plus at start
@@ -422,6 +275,7 @@ class CalculatorModel:
                     raise ValueError(f"Error converting '{token}': {str(e)}")
                 
         return ''.join(dec_expr)
+    
 
     def evaluate_expression(self, expr: str, base: str) -> str:
         """Evaluate a mathematical expression in the given base.
@@ -444,16 +298,39 @@ class CalculatorModel:
             ValueError: For invalid expressions or results that can't be represented
         """
         print(f"[TRACE] CalculatorModel.evaluate_expression called with: expr={expr}, base={base}")
+        
+        
+        
         # First convert the expression to decimal
         dec_expr = self.convert_to_decimal(expr, base)
         print(f"[TRACE] Decimal expression: {dec_expr}")
+        # Step 1: Preprocess the expression to replace user symbols
+        # Replace '^' with '**' for exponentiation
+        expr = expr.replace('^', '**')
+        
+        # Replace '√' with 'math.sqrt' including the argument
+        # Use regex to match '√' followed by non-space characters and wrap it properly
+        # Example: '√9' becomes 'math.sqrt(9)'
+        expr = re.sub(r'√(\S+)', r'math.sqrt(\1)', expr)  # \S+ matches one or more non-space characters
+        
+        # Replace '!' for factorial (e.g., '5!' becomes 'math.factorial(5)')
+        expr = re.sub(r'(\d+)!', r'math.factorial(\1)', expr)  # \1 refers to the captured digits group
+        
+        print(f"[TRACE] Preprocessed expression: {expr}")
+        
+        # Step 2: Convert the expression to decimal
+        dec_expr = self.convert_to_decimal(expr, base)
+        print(f"[TRACE] Decimal expression after replacement: {dec_expr}")
+
         try:
             # Replace multiple unary minuses with a single one
             dec_expr = re.sub(r'-{2,}', '-', dec_expr)
             # Replace unary plus followed by minus with just minus
             dec_expr = re.sub(r'\+-', '-', dec_expr)
+            print(f"[TRACE] Expression before eval: {dec_expr}")
             # Evaluate the decimal expression
-            result = eval(dec_expr, {"__builtins__": {}}, {})  # Restricted eval for safety
+            safe_dict = {'math': math}  # Dictionary to expose the math module
+            result = eval(dec_expr, {"__builtins__": {}}, safe_dict)  # Secure eval call
             print(f"[TRACE] Evaluation result: {result}")
             if not isinstance(result, (int, float)):
                 # Check if the result is a numeric type
@@ -468,3 +345,4 @@ class CalculatorModel:
         except Exception as e:
             # Handle any other evaluation error
             raise ValueError(f"Error evaluating expression: {str(e)}") 
+        

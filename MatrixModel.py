@@ -2,6 +2,7 @@ import numpy as np
 from typing import List, Tuple, Dict, Any, Union
 import sympy as sp
 from sympy import Matrix, Symbol, sympify
+from ModelUtils import validate_input, FUNCTIONS
 
 class MatrixModel:
     """A model class for matrix operations and symbolic matrix manipulation.
@@ -66,37 +67,11 @@ class MatrixModel:
             self.symbols[name] = sp.Symbol(name)  # Create new SymPy Symbol if not present
         return self.symbols[name]
     
-    def validate_matrix(self, matrix: List[List[Any]]) -> bool:
-        """Validate if the input is a valid matrix.
-        
-        Performs comprehensive validation:
-        - Non-empty matrix check
-        - List of lists structure verification
-        - Row length consistency check
-        - Support for both numeric and symbolic elements
-        
-        Args:
-            matrix: List of lists representing the matrix to validate
-            
-        Returns:
-            bool: True if valid, False otherwise
-            
-        Raises:
-            ValueError: With detailed description of validation failure
-        """
-        if not matrix:
-            # If the matrix is empty, raise an error
-            raise ValueError("Matrix cannot be empty")
-        if not all(isinstance(row, list) for row in matrix):
-            # If any row is not a list, raise an error
-            raise ValueError("Matrix must be a list of lists")
-        # Check if all rows have the same length
-        row_length = len(matrix[0])
-        if not all(len(row) == row_length for row in matrix):
-            # If any row has a different length, raise an error
-            raise ValueError("All rows must have the same length")
-        # For symbolic matrices, we don't check if elements are numbers
-        return True
+    def parse_element(self, element: str):
+        try:
+            return sp.sympify(element, locals=FUNCTIONS)
+        except Exception:
+            return element  # fallback: return as string if cannot parse
     
     def parse_matrix_input(self, matrix_text: str) -> List[List[Any]]:
         """Parse a matrix from text input, supporting both numeric and symbolic elements.
@@ -162,8 +137,18 @@ class MatrixModel:
             raise ValueError("All rows must have the same number of elements")
             
         # Convert all elements to SymPy format
-        return self.convert_to_sympy(matrix)  # Convert all elements to SymPy objects
-    
+        return matrix  # Elements are already parsed as SymPy objects
+    def validate_matrix(self, matrix):
+        # Check if the input is a list of lists
+        if not isinstance(matrix, list) or not all(isinstance(row, list) for row in matrix):
+            raise ValueError("Invalid matrix format")
+        
+        # Check if all rows have the same length
+        row_lengths = [len(row) for row in matrix]
+        if len(set(row_lengths)) > 1:
+            raise ValueError("All rows must have the same length")
+        
+        return True
     def to_sympy_matrix(self, matrix: List[List[Any]]) -> sp.Matrix:
         """Convert a matrix to SymPy Matrix format for symbolic operations.
         
